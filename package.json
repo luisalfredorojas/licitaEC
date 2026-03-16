@@ -1,0 +1,40 @@
+{
+  "name": "licitaec",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "bunx prisma generate",
+    "db:push": "bunx prisma db push",
+    "db:migrate": "bunx prisma migrate dev",
+    "workers": "bun run src/workers/index.ts",
+    "seed:historical": "bun run scripts/seed-historical.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "vitest": "^4.1.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.5.0",
+    "@react-email/components": "^1.0.9",
+    "bullmq": "^5.71.0",
+    "ioredis": "^5.10.0",
+    "next": "15",
+    "prisma": "^7.5.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-email": "^5.2.9",
+    "resend": "^6.9.4",
+    "zod": "^4.3.6"
+  }
+}

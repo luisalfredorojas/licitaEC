@@ -1,0 +1,208 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Multi-tenancy ─────────────────────────────────────
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  ruc       String   @unique @db.VarChar(13)
+  rup       String?  @db.VarChar(50)
+  plan      Plan     @default(BASICO)
+  cpcCodes  String[] // códigos CPC registrados por la org
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users              User[]
+  alerts             Alert[]
+  trackedProcesses   TrackedProcess[]
+
+  @@map("organizations")
+}
+
+enum Plan {
+  BASICO
+  PROFESIONAL
+  EMPRESA
+}
+
+model User {
+  id                  String   @id @default(cuid())
+  email               String   @unique
+  name                String?
+  orgId               String
+  role                UserRole @default(MEMBER)
+  notificationsActive Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+}
+
+// ─── Procesos de contratación ──────────────────────────
+
+model ProcurementProcess {
+  id                      String             @id @default(cuid())
+  ocid                    String             @unique
+  title                   String
+  description             String?            @db.Text
+  status                  ProcurementStatus
+  procurementMethod       String             // OCDS: open, selective, limited, direct
+  procurementMethodDetails String?
+  ocpMethodType           OcpMethodType?
+
+  buyerName               String
+  buyerId                 String?
+  buyerRegion             String?            // provincia
+  buyerLocality           String?            // cantón
+
+  estimatedValue          Decimal?           @db.Decimal(14, 2)
+  currency                String             @default("USD") @db.VarChar(3)
+  awardedValue            Decimal?           @db.Decimal(14, 2)
+
+  tenderStartDate         DateTime?
+  tenderEndDate           DateTime?
+  enquiryEndDate          DateTime?
+  awardDate               DateTime?
+
+  cpcCodes                String[]           // códigos CPC extraídos del release
+  numberOfTenderers       Int?
+
+  rawOcdsData             Json?              // release OCDS completo para referencia
+  publishedDate           DateTime?
+  lastUpdatedFromSource   DateTime?
+
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+
+  alerts          Alert[]
+  trackedBy       TrackedProcess[]
+  awards          ProcurementAward[]
+
+  @@index([status])
+  @@index([procurementMethod])
+  @@index([buyerRegion])
+  @@index([tenderEndDate])
+  @@index([cpcCodes])
+  @@map("procurement_processes")
+}
+
+enum ProcurementStatus {
+  PLANNING
+  TENDER
+  AWARD
+  CONTRACT
+  CLOSED
+  CANCELLED
+}
+
+enum OcpMethodType {
+  OPEN
+  SELECTIVE
+  LIMITED
+  DIRECT
+}
+
+model ProcurementAward {
+  id           String   @id @default(cuid())
+  processId    String
+  awardId      String   // id del award en OCDS
+  title        String?
+  status       String
+  value        Decimal? @db.Decimal(14, 2)
+  currency     String   @default("USD") @db.VarChar(3)
+  awardDate    DateTime?
+  supplierName String?
+  supplierId   String?
+
+  process ProcurementProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+
+  @@unique([processId, awardId])
+  @@map("procurement_awards")
+}
+
+// ─── Seguimiento y alertas ─────────────────────────────
+
+model TrackedProcess {
+  id        String   @id @default(cuid())
+  orgId     String
+  processId String
+  notes     String?
+  stage     String?  // pipeline stage personalizado
+  createdAt DateTime @default(now())
+
+  org     Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  process ProcurementProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, processId])
+  @@map("tracked_processes")
+}
+
+model Alert {
+  id         String    @id @default(cuid())
+  orgId      String
+  processId  String
+  type       AlertType
+  title      String
+  message    String?   @db.Text
+  matchedCpc String?   // código CPC que generó el match
+  matchType  String?   // 'exact' | 'category'
+  read       Boolean   @default(false)
+  notifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  org     Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  process ProcurementProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, read])
+  @@index([orgId, createdAt])
+  @@map("alerts")
+}
+
+enum AlertType {
+  NEW_PROCESS
+  STATUS_CHANGE
+  DEADLINE_REMINDER
+}
+
+// ─── Sincronización ────────────────────────────────────
+
+model SyncLog {
+  id              String     @id @default(cuid())
+  status          SyncStatus
+  startedAt       DateTime   @default(now())
+  completedAt     DateTime?
+  totalProcessed  Int        @default(0)
+  newRecords      Int        @default(0)
+  updatedRecords  Int        @default(0)
+  errors          Int        @default(0)
+  lastPage        Int?       // para continuar si falla
+  lastOcid        String?    // último ocid procesado
+  year            Int?
+  errorDetails    Json?
+  createdAt       DateTime   @default(now())
+
+  @@index([status, startedAt])
+  @@map("sync_logs")
+}
+
+enum SyncStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIAL
+}
