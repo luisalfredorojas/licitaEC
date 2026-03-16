@@ -30,45 +30,42 @@ export async function findMatchingOrganizations(
   // Todos los códigos a buscar (exactos + categorías padre)
   const allSearchCodes = [...new Set([...exactCodes, ...categoryCodes])];
 
-  // Una sola query SQL eficiente con ANY() — busca orgs que tengan
-  // al menos un código CPC que esté en nuestro set de búsqueda
-  const matchingOrgs = await prisma.organization.findMany({
+  // Buscar en OrgCpcCode las orgs que tienen alguno de los códigos de búsqueda
+  const matchingCpcRows = await prisma.orgCpcCode.findMany({
     where: {
-      cpcCodes: {
-        hasSome: allSearchCodes,
-      },
+      cpcCode: { in: allSearchCodes },
     },
     select: {
-      id: true,
-      cpcCodes: true,
+      orgId: true,
+      cpcCode: true,
     },
   });
 
   const results: MatchResult[] = [];
 
-  for (const org of matchingOrgs) {
-    for (const orgCode of org.cpcCodes) {
-      // Match exacto: el código de la org está directamente en los CPC del proceso
-      if (exactCodes.includes(orgCode)) {
-        results.push({
-          orgId: org.id,
-          matchedCpcCode: orgCode,
-          matchType: "exact",
-          processId,
-        });
-        continue;
-      }
+  for (const row of matchingCpcRows) {
+    const orgCode = row.cpcCode;
 
-      // Match por categoría: la org tiene un código de 5 dígitos que es padre
-      // de algún código de 9 dígitos del proceso
-      if (orgCode.length === 5 && categoryCodes.includes(orgCode)) {
-        results.push({
-          orgId: org.id,
-          matchedCpcCode: orgCode,
-          matchType: "category",
-          processId,
-        });
-      }
+    // Match exacto: el código de la org está directamente en los CPC del proceso
+    if (exactCodes.includes(orgCode)) {
+      results.push({
+        orgId: row.orgId,
+        matchedCpcCode: orgCode,
+        matchType: "exact",
+        processId,
+      });
+      continue;
+    }
+
+    // Match por categoría: la org tiene un código de 5 dígitos que es padre
+    // de algún código de 9 dígitos del proceso
+    if (orgCode.length === 5 && categoryCodes.includes(orgCode)) {
+      results.push({
+        orgId: row.orgId,
+        matchedCpcCode: orgCode,
+        matchType: "category",
+        processId,
+      });
     }
   }
 

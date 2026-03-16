@@ -40,6 +40,8 @@ function getAlertTitle(alertType: AlertType): string {
       return "Actualización de proceso";
     case "DEADLINE_REMINDER":
       return "Fecha límite próxima";
+    default:
+      return "Notificación de contrato";
   }
 }
 
