@@ -8,17 +8,17 @@ type SercopItem = {
   ocid: string
   year: number
   month: number
-  method: string
-  internal_type: string
-  locality: string
-  region: string
-  suppliers: string
-  buyer: string
-  amount: string
-  date: string
-  title: string
-  description: string
-  budget: string
+  method: string | null
+  internal_type: string | null
+  locality: string | null
+  region: string | null
+  suppliers: string | null
+  buyer: string | null
+  amount: string | null
+  date: string | null
+  title: string | null
+  description: string | null
+  budget: string | null
 }
 
 type SercopResponse = {
@@ -28,8 +28,8 @@ type SercopResponse = {
   data: SercopItem[]
 }
 
-function mapProcurementMethod(internalType: string): string {
-  const t = internalType.toLowerCase()
+function mapProcurementMethod(internalType: string | null): string {
+  const t = (internalType ?? "").toLowerCase()
   if (t.includes("subasta inversa")) return "SUBASTA_INVERSA"
   if (t.includes("licitac")) return "LICITACION"
   if (t.includes("cotizac")) return "COTIZACION"
@@ -40,8 +40,8 @@ function mapProcurementMethod(internalType: string): string {
   return "MENOR_CUANTIA"
 }
 
-function mapOcpType(method: string): string {
-  switch (method.toLowerCase()) {
+function mapOcpType(method: string | null): string {
+  switch ((method ?? "").toLowerCase()) {
     case "open": return "OPEN"
     case "selective": return "SELECTIVE"
     case "limited": return "LIMITED"
@@ -51,12 +51,9 @@ function mapOcpType(method: string): string {
 }
 
 function mapStatus(item: SercopItem): string {
-  // Processes with a future date or active tenders
-  const itemDate = new Date(item.date)
-  const now = new Date()
-  if (itemDate > now) return "TENDER"
-  // Catalogue / direct purchases are completed contracts
-  const t = item.internal_type.toLowerCase()
+  const itemDate = item.date ? new Date(item.date) : null
+  if (itemDate && itemDate > new Date()) return "TENDER"
+  const t = (item.internal_type ?? "").toLowerCase()
   if (t.includes("cat\u00e1logo") || t.includes("catalogo") || item.method === "direct") {
     return "CONTRACT"
   }
