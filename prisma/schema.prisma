@@ -84,14 +84,29 @@ model Organization {
   stripeSubscriptionId   String?           @unique
   subscriptionStatus     String?           // active, trialing, past_due, canceled
   trialEndsAt            DateTime?
+  notificationSettings   Json?             // NotificationPreferences
   createdAt              DateTime          @default(now())
   updatedAt              DateTime          @updatedAt
 
-  users      User[]
-  cpcCodes   OrgCpcCode[]
-  alerts     Alert[]
-  tracking   ProcessTracking[]
-  documents  BidDocument[]
+  users             User[]
+  cpcCodes          OrgCpcCode[]
+  alerts            Alert[]
+  tracking          ProcessTracking[]
+  documents         BidDocument[]
+  pushSubscriptions PushSubscription[]
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  orgId     String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 }
 
 model User {
@@ -105,10 +120,11 @@ model User {
   lastLoginAt   DateTime?
   createdAt     DateTime  @default(now())
 
-  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  accounts     Account[]
-  sessions     Session[]
-  tracking     ProcessTracking[] @relation("AssignedTo")
+  organization      Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  accounts          Account[]
+  sessions          Session[]
+  tracking          ProcessTracking[]   @relation("AssignedTo")
+  pushSubscriptions PushSubscription[]
 }
 
 model OrgCpcCode {

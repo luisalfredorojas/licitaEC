@@ -1,4 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { getPlanLimits, cpcLimitError } from "@/lib/plan-guard";
+import { SubscriptionPlan } from "@prisma/client";
+import { z } from "zod";
+
+const addCpcSchema = z.object({
+  cpcCode: z.string().min(4).max(10),
+  cpcDescription: z.string().optional(),
+});
 
 const CPC_CODES = [
   { code: "61110", description: "Servicios de construcción de edificios residenciales" },
@@ -46,4 +56,30 @@ export async function GET(req: NextRequest) {
   ).slice(0, 15);
 
   return NextResponse.json({ results });
+}
+
+export async function POST(req: NextRequest) {
+  const session = await auth();
+  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const user = session.user as any;
+  const orgId = user.orgId as string;
+  const plan = user.plan as SubscriptionPlan;
+
+  const body = await req.json().catch(() => ({}));
+  const parsed = addCpcSchema.safeParse(body);
+  if (!parsed.success) return NextResponse.json({ error: "Datos inválidos" }, { status: 400 });
+
+  const limits = getPlanLimits(plan);
+  const currentCount = await prisma.orgCpcCode.count({ where: { orgId } });
+  if (currentCount >= limits.maxCpcCodes) {
+    return cpcLimitError(plan);
+  }
+
+  const cpc = await prisma.orgCpcCode.create({
+    data: { orgId, cpcCode: parsed.data.cpcCode, cpcDescription: parsed.data.cpcDescription ?? null },
+  });
+
+  return NextResponse.json(cpc, { status: 201 });
 }
