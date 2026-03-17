@@ -1,131 +1,139 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
-import { prisma } from "@/lib/prisma"
-import { Prisma, ProcurementStatus, ProcurementMethod } from "@prisma/client"
+
+const SERCOP_BASE = "https://datosabiertos.compraspublicas.gob.ec/PLATAFORMA/api"
+
+type SercopItem = {
+  id: number
+  ocid: string
+  year: number
+  month: number
+  method: string
+  internal_type: string
+  locality: string
+  region: string
+  suppliers: string
+  buyer: string
+  amount: string
+  date: string
+  title: string
+  description: string
+  budget: string
+}
+
+type SercopResponse = {
+  total: number
+  page: number
+  pages: number
+  data: SercopItem[]
+}
+
+function mapProcurementMethod(internalType: string): string {
+  const t = internalType.toLowerCase()
+  if (t.includes("subasta inversa")) return "SUBASTA_INVERSA"
+  if (t.includes("licitac")) return "LICITACION"
+  if (t.includes("cotizac")) return "COTIZACION"
+  if (t.includes("cat\u00e1logo") || t.includes("catalogo")) return "CATALOGO_ELECTRONICO"
+  if (t.includes("menor cuant")) return "MENOR_CUANTIA"
+  if (t.includes("consultor")) return "CONSULTORIA_LISTA_CORTA"
+  if (t.includes("\u00edn\u00edma") || t.includes("infima")) return "INFIMA_CUANTIA"
+  return "MENOR_CUANTIA"
+}
+
+function mapOcpType(method: string): string {
+  switch (method.toLowerCase()) {
+    case "open": return "OPEN"
+    case "selective": return "SELECTIVE"
+    case "limited": return "LIMITED"
+    case "direct": return "DIRECT"
+    default: return "OPEN"
+  }
+}
+
+function mapStatus(item: SercopItem): string {
+  // Processes with a future date or active tenders
+  const itemDate = new Date(item.date)
+  const now = new Date()
+  if (itemDate > now) return "TENDER"
+  // Catalogue / direct purchases are completed contracts
+  const t = item.internal_type.toLowerCase()
+  if (t.includes("cat\u00e1logo") || t.includes("catalogo") || item.method === "direct") {
+    return "CONTRACT"
+  }
+  return "AWARD"
+}
 
 export async function GET(req: NextRequest) {
   const session = await auth()
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const orgId = (session.user as any).orgId as string
   const { searchParams } = req.nextUrl
 
   const q = searchParams.get("q") ?? ""
-  const statusParam = searchParams.getAll("status[]")
-  const provinceParam = searchParams.getAll("province[]")
   const methodParam = searchParams.getAll("method[]")
-  const minAmount = searchParams.get("minAmount")
-  const maxAmount = searchParams.get("maxAmount")
-  const dateFrom = searchParams.get("dateFrom")
-  const dateTo = searchParams.get("dateTo")
-  const myCpcOnly = searchParams.get("myCpcOnly") === "true"
+  const provinceParam = searchParams.getAll("province[]")
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1"))
-  const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") ?? "25")))
-  const orderBy = searchParams.get("orderBy") ?? "publishedDate"
-  const orderDir = (searchParams.get("orderDir") ?? "desc") as "asc" | "desc"
+  const year = searchParams.get("year") ?? String(new Date().getFullYear())
 
-  const skip = (page - 1) * limit
+  // Build SERCOP query
+  const sercopParams = new URLSearchParams({ page: String(page), year })
+  if (q.trim()) sercopParams.set("search", q.trim())
 
-  // Build where clause
-  const where: Prisma.ProcurementProcessWhereInput = {}
-
-  // Full-text search
-  if (q.trim()) {
-    where.OR = [
-      { title: { contains: q, mode: "insensitive" } },
-      { description: { contains: q, mode: "insensitive" } },
-      { buyerName: { contains: q, mode: "insensitive" } },
-    ]
-  }
-
-  // Status filter
-  if (statusParam.length > 0) {
-    where.status = { in: statusParam as ProcurementStatus[] }
-  }
-
-  // Province filter
-  if (provinceParam.length > 0) {
-    where.buyerProvince = { in: provinceParam, mode: "insensitive" }
-  }
-
-  // Method filter
-  if (methodParam.length > 0) {
-    where.procurementMethod = { in: methodParam as ProcurementMethod[] }
-  }
-
-  // Amount range
-  if (minAmount || maxAmount) {
-    where.amountEstimated = {}
-    if (minAmount) where.amountEstimated.gte = new Prisma.Decimal(minAmount)
-    if (maxAmount) where.amountEstimated.lte = new Prisma.Decimal(maxAmount)
-  }
-
-  // Date range
-  if (dateFrom || dateTo) {
-    where.publishedDate = {}
-    if (dateFrom) where.publishedDate.gte = new Date(dateFrom)
-    if (dateTo) where.publishedDate.lte = new Date(dateTo)
-  }
-
-  // My CPC only
-  if (myCpcOnly) {
-    const orgCpcs = await prisma.orgCpcCode.findMany({
-      where: { orgId },
-      select: { cpcCode: true },
+  let sercopData: SercopResponse
+  try {
+    const res = await fetch(`${SERCOP_BASE}/search_ocds?${sercopParams.toString()}`, {
+      signal: AbortSignal.timeout(20_000),
+      next: { revalidate: 300 },
     })
-    const codes = orgCpcs.map((c) => c.cpcCode)
-    if (codes.length > 0) {
-      where.cpcCodes = { hasSome: codes }
-    }
+    if (!res.ok) throw new Error(`SERCOP responded with ${res.status}`)
+    sercopData = await res.json()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Error desconocido"
+    return NextResponse.json(
+      { error: `No se pudo conectar con SERCOP: ${message}` },
+      { status: 502 }
+    )
   }
 
-  // Allowed sort fields
-  const allowedOrderFields = ["publishedDate", "tenderEndDate", "amountEstimated", "title", "buyerName"]
-  const safeOrderBy = allowedOrderFields.includes(orderBy) ? orderBy : "publishedDate"
+  // Map to UI format
+  let items = sercopData.data.map((item) => ({
+    id: String(item.id),
+    ocid: item.ocid,
+    title: item.title,
+    description: item.description ?? null,
+    buyerName: item.buyer,
+    buyerProvince: item.region ?? null,
+    status: mapStatus(item),
+    procurementMethod: mapProcurementMethod(item.internal_type),
+    ocpMethodType: mapOcpType(item.method),
+    amountEstimated: item.amount ? parseFloat(item.amount) : null,
+    tenderEndDate: null as string | null,
+    publishedDate: item.date ?? null,
+    cpcCodes: [] as string[],
+    isTracked: false,
+    trackingStatus: null as string | null,
+  }))
 
-  const [total, items] = await Promise.all([
-    prisma.procurementProcess.count({ where }),
-    prisma.procurementProcess.findMany({
-      where,
-      orderBy: { [safeOrderBy]: orderDir },
-      skip,
-      take: limit,
-      select: {
-        id: true,
-        ocid: true,
-        title: true,
-        buyerName: true,
-        buyerProvince: true,
-        status: true,
-        procurementMethod: true,
-        ocpMethodType: true,
-        amountEstimated: true,
-        tenderEndDate: true,
-        publishedDate: true,
-        cpcCodes: true,
-        // Include tracking status for this org
-        tracking: {
-          where: { orgId },
-          select: { internalStatus: true },
-        },
-      },
-    }),
-  ])
+  // Post-response filtering (SERCOP API doesn't support these natively)
+  if (methodParam.length > 0) {
+    items = items.filter((item) => methodParam.includes(item.procurementMethod))
+  }
+  if (provinceParam.length > 0) {
+    items = items.filter((item) =>
+      item.buyerProvince !== null &&
+      provinceParam.some((p) =>
+        item.buyerProvince!.toLowerCase().includes(p.toLowerCase())
+      )
+    )
+  }
 
   return NextResponse.json({
-    items: items.map((item) => ({
-      ...item,
-      amountEstimated: item.amountEstimated ? Number(item.amountEstimated) : null,
-      isTracked: item.tracking.length > 0,
-      trackingStatus: item.tracking[0]?.internalStatus ?? null,
-      tracking: undefined,
-    })),
+    items,
     pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
+      page: sercopData.page,
+      limit: 25,
+      total: sercopData.total,
+      totalPages: sercopData.pages,
     },
   })
 }

@@ -4,56 +4,79 @@ import { prisma } from "@/lib/prisma";
 import { getPlanLimits, cpcLimitError } from "@/lib/plan-guard";
 import { SubscriptionPlan } from "@prisma/client";
 import { z } from "zod";
+import rawCpcCodes from "@/data/cpc-codes.json";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface CpcEntry {
+  code: string;
+  description: string;
+}
+
+const CPC_CODES: CpcEntry[] = rawCpcCodes;
+
+// ─── Schemas ──────────────────────────────────────────────────────────────────
 
 const addCpcSchema = z.object({
   cpcCode: z.string().min(4).max(10),
   cpcDescription: z.string().optional(),
 });
 
-const CPC_CODES = [
-  { code: "61110", description: "Servicios de construcción de edificios residenciales" },
-  { code: "61120", description: "Servicios de construcción de edificios no residenciales" },
-  { code: "51000", description: "Servicios de transporte terrestre" },
-  { code: "51200", description: "Servicios de transporte por carretera de mercancías" },
-  { code: "84111", description: "Servicios de administración general del Estado" },
-  { code: "86110", description: "Servicios hospitalarios" },
-  { code: "86210", description: "Servicios de medicina general" },
-  { code: "92110", description: "Servicios de reparación de computadoras y periféricos" },
-  { code: "72100", description: "Servicios de tecnología de la información" },
-  { code: "72200", description: "Servicios de consultoría en tecnología de la información" },
-  { code: "69201", description: "Servicios de contabilidad y teneduría de libros" },
-  { code: "69300", description: "Servicios de auditoría" },
-  { code: "62010", description: "Servicios de desarrollo de software" },
-  { code: "62020", description: "Servicios de consultoría en sistemas informáticos" },
-  { code: "55101", description: "Servicios de alojamiento en hoteles" },
-  { code: "56101", description: "Servicios de restaurantes y comedores" },
-  { code: "85100", description: "Servicios de enseñanza preescolar y primaria" },
-  { code: "85200", description: "Servicios de enseñanza secundaria" },
-  { code: "46110", description: "Servicios de venta al por mayor de productos farmacéuticos" },
-  { code: "33120", description: "Servicios de mantenimiento y reparación de maquinaria" },
-  { code: "71121", description: "Servicios de ingeniería civil" },
-  { code: "71122", description: "Servicios de arquitectura" },
-  { code: "80100", description: "Servicios de investigación y guardia privada" },
-  { code: "81210", description: "Servicios de limpieza de edificios" },
-  { code: "49000", description: "Servicios de suministro de agua" },
-  { code: "35110", description: "Servicios de generación de electricidad" },
-  { code: "64191", description: "Servicios bancarios de depósito" },
-  { code: "95120", description: "Servicios de reparación de teléfonos celulares" },
-];
+// ─── GET /api/cpc?q=<query> ───────────────────────────────────────────────────
+// No auth required — used during onboarding before login.
+// Supports searching by code prefix (e.g. "481") and by description keyword
+// (e.g. "papel"). Returns up to 15 matches.
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const query = searchParams.get("q")?.toLowerCase() ?? "";
+  const raw = searchParams.get("q")?.trim() ?? "";
+  const query = raw.toLowerCase();
 
-  if (!query || query.length < 2) {
-    return NextResponse.json({ results: CPC_CODES.slice(0, 10) });
+  // When no query or too short, return a diverse set of representative codes
+  // spread across common procurement categories so the selector looks useful
+  // before the user starts typing.
+  if (query.length < 2) {
+    const defaults: CpcEntry[] = [
+      { code: "61110", description: "Servicios de construcción de edificios residenciales" },
+      { code: "62010", description: "Servicios de desarrollo de software" },
+      { code: "71121", description: "Servicios de ingeniería civil" },
+      { code: "86110", description: "Servicios hospitalarios de internamiento" },
+      { code: "46110", description: "Medicamentos para uso humano" },
+      { code: "81210", description: "Servicios de limpieza de edificios e instalaciones" },
+      { code: "82210", description: "Servicios de guardia y vigilancia privada armada" },
+      { code: "80520", description: "Servicios de capacitación para adultos y empresas" },
+      { code: "51200", description: "Servicios de transporte por carretera de mercancías" },
+      { code: "48130", description: "Muebles escolares y universitarios" },
+    ];
+    return NextResponse.json({ results: defaults });
   }
 
-  const results = CPC_CODES.filter(
-    (cpc) =>
-      cpc.code.includes(query) ||
-      cpc.description.toLowerCase().includes(query)
-  ).slice(0, 15);
+  // Primary pass: exact code-prefix match (highest relevance for numeric input)
+  const byCodePrefix = CPC_CODES.filter((cpc) =>
+    cpc.code.startsWith(query)
+  );
+
+  // Secondary pass: substring match in code (handles mid-code input like "110")
+  const byCodeSubstring = CPC_CODES.filter(
+    (cpc) => !cpc.code.startsWith(query) && cpc.code.includes(query)
+  );
+
+  // Tertiary pass: keyword match in description (split on whitespace to allow
+  // multi-word queries such as "servicios construcción")
+  const keywords = query.split(/\s+/).filter((k) => k.length >= 2);
+  const alreadyMatched = new Set(
+    [...byCodePrefix, ...byCodeSubstring].map((c) => c.code)
+  );
+  const byDescription = CPC_CODES.filter((cpc) => {
+    if (alreadyMatched.has(cpc.code)) return false;
+    const desc = cpc.description.toLowerCase();
+    return keywords.every((kw) => desc.includes(kw));
+  });
+
+  const results = [...byCodePrefix, ...byCodeSubstring, ...byDescription].slice(
+    0,
+    15
+  );
 
   return NextResponse.json({ results });
 }
